@@ -26,31 +26,27 @@ class SocketSender(object):
         self.server = server
         self.port = port
         self.clientname = socket.gethostname()
-        self.protocol = socket.SOCK_STREAM
-        if use_udp:
-            self.protocol = socket.SOCK_DGRAM
+        self.protocol = socket.SOCK_DGRAM if use_udp else socket.SOCK_STREAM
 
     def connect(self) -> bool:
-        if self.socket == None:
-            address_info = socket.getaddrinfo(self.server, self.port, socket.AF_UNSPEC, self.protocol)
-            if address_info == None:
-                return False
-
-            for (address_family, socket_type, protocol, canon_name, socket_address) in address_info:
-                self.socket = socket.socket(address_family, self.protocol)
-                if self.socket == None:
-                    return False
-                try:
-                    self.socket.connect(socket_address)
-                    return True
-                except:
-                    if self.socket != None:
-                        self.socket.close()
-                        self.socket = None
-                    continue
-            return False
-        else:
+        if self.socket != None:
             return True
+        address_info = socket.getaddrinfo(self.server, self.port, socket.AF_UNSPEC, self.protocol)
+        if address_info is None:
+            return False
+
+        for (address_family, socket_type, protocol, canon_name, socket_address) in address_info:
+            self.socket = socket.socket(address_family, self.protocol)
+            if self.socket is None:
+                return False
+            try:
+                self.socket.connect(socket_address)
+                return True
+            except:
+                if self.socket != None:
+                    self.socket.close()
+                    self.socket = None
+        return False
 
     def close(self) -> None:
         if self.socket != None:
@@ -59,9 +55,10 @@ class SocketSender(object):
 
     def send(self, message: str) -> None:
         syslog_message = "<14>1 %s PYTHON_TEST_SENDER - - - - %s\n" % (
-            datetime.utcnow().isoformat() + 'Z',
-            message
+            f'{datetime.utcnow().isoformat()}Z',
+            message,
         )
+
         encoded = syslog_message.encode('utf-8')
 
         if self.socket != None or self.connect():
@@ -83,30 +80,31 @@ def send_single_message(client, message):
 
 
 def send_messages_from_file(client, file, delay, lines, csv):
-    input_file = open(file, 'r')
+    with open(file, 'r') as input_file:
+        # For CSV files, skip first line
+        if csv:
+            next(input_file)
 
-    # For CSV files, skip first line
-    if csv:
-        next(input_file)
+        # Track the number of lines sent
+        replay_line_count = 0
 
-    # Track the number of lines sent
-    replay_line_count = 0
+        # Track the time to send
+        timer_start = time.perf_counter()
 
-    # Track the time to send
-    timer_start = time.perf_counter()
+        for line in input_file:
+            client.send(line)
+            time.sleep(delay * 0.001)
+            replay_line_count += 1
+            if replay_line_count == lines: break
 
-    for line in input_file:
-        client.send(line)
-        time.sleep(delay * 0.001)
-        replay_line_count += 1
-        if replay_line_count == lines: break
-
-    input_file.close()
     client.close()
 
     time_taken = round(time.perf_counter() - timer_start,4)
 
-    print ( 'Replayed [%s] lines from [%s] in [%s] seconds' % ( replay_line_count, file, time_taken ), file=sys.stderr )
+    print(
+        f'Replayed [{replay_line_count}] lines from [{file}] in [{time_taken}] seconds',
+        file=sys.stderr,
+    )
 
 
 if __name__ == "__main__":
